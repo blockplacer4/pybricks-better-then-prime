@@ -30,6 +30,8 @@ def stop_motor(motor):
     motor.stop()
 
 def write_display(funktionen, index, debugs, brightness_pattern):
+    # Clear display first
+    hub.display.off()
     # Display normal programs
     for count in range(1, len(funktionen) + 1):
         x, y = divmod(count - 1, 5)
@@ -46,9 +48,29 @@ def write_display(funktionen, index, debugs, brightness_pattern):
         hub.display.pixel(x, y, light)
 
 def einsammelone():
-    base.straight(307)
+    distance = 307  # mm
+    step_distance = 10  # mm per step
+    steps = int(distance / step_distance)
+    try:
+        for _ in range(steps):
+            base.straight(step_distance)
+            yield
+    finally:
+        base.stop()
 
-# Define normal functions (placeholders for your actual functions)
+def debug_function(motor, direction):
+    global current_motor
+    current_motor = motor
+    # Start the motor
+    turn_motor(motor, direction)
+    try:
+        while True:
+            yield
+    finally:
+        stop_motor(motor)
+        current_motor = None
+
+# Define normal functions
 funktionen = [einsammelone]
 
 # Define debug items with motors and directions
@@ -72,6 +94,7 @@ index = 1
 debounce_time = 200
 last_action_time = 0
 watch = StopWatch()
+function_running = None
 current_motor = None
 
 total_length = len(funktionen) + len(debugs)
@@ -80,53 +103,57 @@ while True:
     buttons = set(hub.buttons.pressed())
     current_time = watch.time()
 
-    # Handle left and right button navigation
-    if Button.LEFT in buttons and current_time - last_action_time > debounce_time:
-        index = index - 1 if index > 1 else total_length
-        # Skip placeholders in debug programs
-        while index > len(funktionen) and debugs[index - len(funktionen) - 1][0] is None:
+    if function_running is None:
+        # Handle left and right button navigation
+        if Button.LEFT in buttons and current_time - last_action_time > debounce_time:
             index = index - 1 if index > 1 else total_length
-        write_display(funktionen, index, debugs, brightness_pattern)
-        last_action_time = current_time
-    elif Button.RIGHT in buttons and current_time - last_action_time > debounce_time:
-        index = index + 1 if index < total_length else 1
-        # Skip placeholders in debug programs
-        while index > len(funktionen) and debugs[index - len(funktionen) - 1][0] is None:
+            # Skip placeholders in debug programs
+            while index > len(funktionen) and debugs[index - len(funktionen) - 1][0] is None:
+                index = index - 1 if index > 1 else total_length
+            write_display(funktionen, index, debugs, brightness_pattern)
+            last_action_time = current_time
+        elif Button.RIGHT in buttons and current_time - last_action_time > debounce_time:
             index = index + 1 if index < total_length else 1
-        write_display(funktionen, index, debugs, brightness_pattern)
-        last_action_time = current_time
-    else:
-        write_display(funktionen, index, debugs, brightness_pattern)
+            # Skip placeholders in debug programs
+            while index > len(funktionen) and debugs[index - len(funktionen) - 1][0] is None:
+                index = index + 1 if index < total_length else 1
+            write_display(funktionen, index, debugs, brightness_pattern)
+            last_action_time = current_time
+        else:
+            write_display(funktionen, index, debugs, brightness_pattern)
 
-    # Handle actions
-    if index <= len(funktionen):
-        # For normal programs
+        # Handle actions
         if Button.CENTER in buttons and current_time - last_action_time > debounce_time:
-            # Start your function here
-            function_to_start = funktionen[index - 1]
-            # print("Starting function:", function_to_start)
-            # Call your actual function instead of print
-            function_to_start()
+            if index <= len(funktionen):
+                # Start normal function
+                function_to_start = funktionen[index - 1]
+                function_running = function_to_start()
+            else:
+                # Start debug function
+                debug_index = index - len(funktionen) - 1
+                debug_item = debugs[debug_index]
+                if debug_item[0] is not None:
+                    motor, direction = debug_item
+                    function_running = debug_function(motor, direction)
             last_action_time = current_time
     else:
-        # For debug programs
-        debug_index = index - len(funktionen) - 1
-        debug_item = debugs[debug_index]
-        if debug_item[0] is not None:
-            motor, direction = debug_item
-            if force_sensor is not None:
-                force_pressed = force_sensor.pressed()
-            else:
-                force_pressed = False
-
-            if force_pressed:
-                # Start the motor while the force sensor is pressed
-                turn_motor(motor, direction)
-                current_motor = motor
-            else:
-                # Stop the motor when the force sensor is released
-                if current_motor is not None:
-                    stop_motor(current_motor)
-                    current_motor = None
+        # Function is running
+        # Do not update the menu display
+        # Check if center button is pressed to stop the function
+        if Button.CENTER in buttons and current_time - last_action_time > debounce_time:
+            function_running = None  # Stop the function
+            # Stop the base and any motors
+            base.stop()
+            if current_motor is not None:
+                stop_motor(current_motor)
+                current_motor = None
+            last_action_time = current_time
+        else:
+            # Continue running the function
+            try:
+                next(function_running)
+            except StopIteration:
+                # Function completed
+                function_running = None
 
     wait(10)
